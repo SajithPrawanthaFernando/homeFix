@@ -74,13 +74,13 @@ export default function Hero() {
           </div>
         </div>
 
-        <div className="flex lg:hidden flex-col lg:flex-row items-center gap-12 lg:gap-20 ">
+        <div className="flex lg:hidden flex-col lg:flex-row items-center gap-12 lg:gap-20 sm:mt-0 mt-[-20px]">
           {/* Right Column: Image */}
           <div className="w-full lg:w-1/2 relative">
             {/* Decorative Background Blob */}
             <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[120%] h-[120%] bg-primary/5 rounded-full blur-3xl -z-10"></div>
 
-            <div className="relative rounded-2xl overflow-hidden shadow-2xl border-4 border-white">
+            <div className="relative rounded-2xl overflow-hidden shadow-lg border-4 border-white">
               <Image
                 src={hero}
                 alt="Sparkling clean living room"
