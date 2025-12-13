@@ -209,13 +209,13 @@ export default function ContactPage() {
                     </div>
                     <div>
                       <p className="text-sm text-secondary-light font-medium">
-                        Call Us (8am - 6pm)
+                        Call Us (9am - 5pm)
                       </p>
                       <a
                         href={`tel:+${WHATSAPP_NUMBER}`}
                         className="text-lg  text-secondary hover:text-primary transition-colors"
                       >
-                        +94 77 123 4567
+                        +94 76 936 3695
                       </a>
                     </div>
                   </div>
@@ -234,7 +234,7 @@ export default function ContactPage() {
                         target="_blank"
                         className="text-lg text-secondary hover:text-primary transition-colors"
                       >
-                        +94 77 123 4567
+                        +94 76 936 3695
                       </a>
                     </div>
                   </div>
@@ -290,11 +290,16 @@ export default function ContactPage() {
                   {[
                     "Colombo 1-15",
                     "Dehiwala",
-                    "Mount Lavinia",
+                    "Wattala",
                     "Rajagiriya",
+                    "Thalawathugoda",
+                    "Kotte",
                     "Nugegoda",
                     "Battaramulla",
-                    "Wattala",
+                    "Pelawatte",
+                    "Kohuwala",
+                    "Peliyagoda",
+                    "Mount Lavinia",
                   ].map((area) => (
                     <span
                       key={area}
@@ -530,7 +535,7 @@ export default function ContactPage() {
                     <textarea
                       id="message"
                       name="message"
-                      rows={2}
+                      rows={3}
                       onBlur={() => handleBlur("message")}
                       aria-invalid={!!errors.message}
                       aria-describedby={

@@ -129,7 +129,7 @@ export default function Footer() {
                   href="tel:+94771234567"
                   className="hover:text-white transition-colors"
                 >
-                  +94 77 123 4567
+                  +94 76 936 3695
                 </a>
               </li>
               <li className="flex items-center gap-3">
