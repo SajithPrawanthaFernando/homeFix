@@ -1,7 +1,9 @@
 "use client";
 
 import { Phone, Mail, MapPin, MessageCircle } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
+import { db } from "@/lib/firebase";
+import { collection, addDoc, query, where, getDocs } from "firebase/firestore";
 
 type FormValues = {
   name: string;
@@ -18,22 +20,22 @@ type FormErrors = Partial<Record<keyof FormValues, string>>;
 export default function ContactPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errors, setErrors] = useState<FormErrors>({});
+  const [availableTimeSlots, setAvailableTimeSlots] = useState<string[]>([]);
   const [touched, setTouched] = useState<
     Partial<Record<keyof FormValues, boolean>>
   >({});
 
+  const [selectedService, setSelectedService] = useState("");
+
   const formatToAmPm = (time24: string) => {
-    // expects "HH:mm"
+    if (!time24) return "";
     const [hh, mm] = time24.split(":").map(Number);
     if (Number.isNaN(hh) || Number.isNaN(mm)) return time24;
-
     const period = hh >= 12 ? "PM" : "AM";
     const hour12 = hh % 12 === 0 ? 12 : hh % 12;
-
     return `${hour12}:${String(mm).padStart(2, "0")} ${period}`;
   };
 
-  // Replace this with your actual business WhatsApp number (format: 947xxxxxx)
   const WHATSAPP_NUMBER = "94769363695";
 
   const serviceOptions = useMemo(
@@ -47,35 +49,80 @@ export default function ContactPage() {
     []
   );
 
+  // Update available time slots when service changes
+  useEffect(() => {
+    if (selectedService === "Deep Cleaning") {
+      setAvailableTimeSlots(["09:00"]); // Only 9 AM - 5 PM slot
+    } else if (selectedService) {
+      setAvailableTimeSlots(["09:00", "13:00"]); // 9 AM and 1 PM slots
+    } else {
+      setAvailableTimeSlots([]);
+    }
+  }, [selectedService]);
+
   const normalizeLKPhone = (raw: string) => {
     const digits = raw.replace(/[^\d+]/g, "").trim();
-
-    // Handle +94XXXXXXXXX
     if (digits.startsWith("+94")) {
-      const num = digits.replace(/[^\d]/g, ""); // 94XXXXXXXXX
+      const num = digits.replace(/[^\d]/g, "");
       if (num.length === 11) return `+${num}`;
       return null;
     }
-
-    // Handle 94XXXXXXXXX
     if (digits.startsWith("94")) {
       const num = digits.replace(/[^\d]/g, "");
       if (num.length === 11) return `+${num}`;
       return null;
     }
-
-    // Handle 0XXXXXXXXX (10 digits)
     const onlyDigits = raw.replace(/\D/g, "");
     if (onlyDigits.startsWith("0") && onlyDigits.length === 10) {
-      return `+94${onlyDigits.slice(1)}`; // +94XXXXXXXXX
+      return `+94${onlyDigits.slice(1)}`;
     }
-
     return null;
+  };
+
+  const checkAvailability = async (
+    date: string,
+    time: string,
+    serviceType: string
+  ) => {
+    try {
+      const bookingsRef = collection(db, "bookings");
+
+      // 1. Get ALL bookings for the selected date
+      const q = query(bookingsRef, where("date", "==", date));
+      const querySnapshot = await getDocs(q);
+
+      // If no bookings exist for this date, it's definitely available
+      if (querySnapshot.empty) return true;
+
+      const existingBookings = querySnapshot.docs.map((doc) => doc.data());
+
+      if (serviceType === "Deep Cleaning") {
+        return false;
+      }
+
+      const hasDeepCleaningOnDate = existingBookings.some(
+        (b) => b.service === "Deep Cleaning"
+      );
+      if (hasDeepCleaningOnDate) {
+        return false;
+      }
+
+      // Check if the specific time slot is taken
+      const isTimeTaken = existingBookings.some((b) => b.time === time);
+      if (isTimeTaken) {
+        return false;
+      }
+
+      // If we pass checks, it's available
+      return true;
+    } catch (error) {
+      console.error("Error checking availability:", error);
+      return false;
+    }
   };
 
   const validate = (values: FormValues): FormErrors => {
     const e: FormErrors = {};
-
     const name = values.name.trim();
     const location = values.location.trim();
     const message = values.message.trim();
@@ -85,8 +132,7 @@ export default function ContactPage() {
 
     if (!values.phone.trim()) e.phone = "Phone number is required.";
     else if (!normalizeLKPhone(values.phone))
-      e.phone =
-        "Enter a valid Sri Lankan number (e.g. 0771234567 or +94771234567).";
+      e.phone = "Enter a valid Sri Lankan number (e.g. 0771234567).";
 
     if (!values.service?.trim()) e.service = "Please select a service.";
     else if (!serviceOptions.includes(values.service))
@@ -95,18 +141,34 @@ export default function ContactPage() {
     if (!location) e.location = "Location is required.";
     else if (location.length < 2) e.location = "Please enter a valid location.";
 
-    if (!values.date) e.date = "Please select a preferred date.";
-    else {
+    // Date Validation
+    if (!values.date) {
+      e.date = "Please select a preferred date.";
+    } else {
       const today = new Date();
       today.setHours(0, 0, 0, 0);
-
       const selected = new Date(values.date);
       selected.setHours(0, 0, 0, 0);
-
       if (selected < today) e.date = "Date cannot be in the past.";
     }
 
-    if (!values.time) e.time = "Please select a preferred time.";
+    // Time Validation (Includes 30-min buffer check)
+    if (!values.time) {
+      e.time = "Please select a preferred time.";
+    } else if (values.date && values.time) {
+      // Create a Date object for the selected booking slot
+      const bookingDateTime = new Date(`${values.date}T${values.time}`);
+      const now = new Date();
+
+      // Create a cutoff time: Current time + 30 minutes
+      const cutoffTime = new Date(now.getTime() + 30 * 60 * 1000);
+
+      if (bookingDateTime < now) {
+        e.time = "This time has already passed. Please select a future time.";
+      } else if (bookingDateTime < cutoffTime) {
+        e.time = "Bookings must be made at least 30 minutes in advance.";
+      }
+    }
 
     if (message && message.length < 5)
       e.message = "If you add a message, please enter at least 5 characters.";
@@ -131,14 +193,12 @@ export default function ContactPage() {
     setTouched((prev) => ({ ...prev, [field]: true }));
   };
 
-  const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const form = e.currentTarget;
-
     const values = readFormValues(form);
     const newErrors = validate(values);
 
-    setErrors(newErrors);
     setTouched({
       name: true,
       phone: true,
@@ -149,31 +209,79 @@ export default function ContactPage() {
       message: true,
     });
 
-    if (Object.keys(newErrors).length > 0) return;
+    if (Object.keys(newErrors).length > 0) {
+      setErrors(newErrors);
+      return;
+    }
 
     setIsSubmitting(true);
 
-    const normalizedPhone = normalizeLKPhone(values.phone)!;
+    // 1. Check Availability in Firebase (Now passing service type)
+    const isAvailable = await checkAvailability(
+      values.date,
+      values.time,
+      values.service
+    );
 
-    const text =
-      `New Booking Request from homeFix.lk\n\n` +
-      `*Name:* ${values.name.trim()}\n` +
-      `*Phone:* ${normalizedPhone}\n` +
-      `*Service:* ${values.service}\n` +
-      `*Location:* ${values.location.trim()}\n` +
-      `*Preferred Date:* ${values.date}\n` +
-      `*Preferred Time:* ${formatToAmPm(values.time)}\n` +
-      `*Note:* ${values.message.trim() || "No special notes"}`;
+    if (!isAvailable) {
+      let errorMessage =
+        "This time slot is already booked. Please choose another time or date.";
 
-    const waLink = `https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(
-      text
-    )}`;
+      // Customize error message for better UX
+      if (values.service === "Deep Cleaning") {
+        errorMessage =
+          "Deep Cleaning requires a full day, but this date already has bookings. Please choose a free date.";
+      }
 
-    window.open(waLink, "_blank");
-    setIsSubmitting(false);
-    form.reset();
-    setErrors({});
-    setTouched({});
+      setErrors({
+        ...newErrors,
+        time: errorMessage,
+      });
+      setIsSubmitting(false);
+      return;
+    }
+
+    try {
+      // 2. Save Booking to Firebase
+      await addDoc(collection(db, "bookings"), {
+        ...values,
+        createdAt: new Date(),
+        status: "pending",
+      });
+
+      // 3. Send WhatsApp Message
+      const normalizedPhone = normalizeLKPhone(values.phone)!;
+      const timeDisplay =
+        values.service === "Deep Cleaning"
+          ? "9:00 AM - 5:00 PM (Full Day)"
+          : formatToAmPm(values.time);
+
+      const text =
+        `New Booking Request from homeFix.lk\n\n` +
+        `*Name:* ${values.name.trim()}\n` +
+        `*Phone:* ${normalizedPhone}\n` +
+        `*Service:* ${values.service}\n` +
+        `*Location:* ${values.location.trim()}\n` +
+        `*Preferred Date:* ${values.date}\n` +
+        `*Preferred Time:* ${timeDisplay}\n` +
+        `*Note:* ${values.message.trim() || "No special notes"}`;
+
+      const waLink = `https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(
+        text
+      )}`;
+      window.open(waLink, "_blank");
+
+      // Reset form
+      form.reset();
+      setErrors({});
+      setTouched({});
+      setSelectedService("");
+    } catch (error) {
+      console.error("Error processing booking:", error);
+      alert("Something went wrong. Please try again or contact us directly.");
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -339,9 +447,6 @@ export default function ContactPage() {
                         name="name"
                         onBlur={() => handleBlur("name")}
                         aria-invalid={!!errors.name}
-                        aria-describedby={
-                          errors.name ? "name-error" : undefined
-                        }
                         className={`w-full px-4 py-3 text-black rounded-lg border outline-none transition-all focus:ring-2 focus:ring-primary/20 ${
                           errors.name && touched.name
                             ? "border-red-400 focus:border-red-400"
@@ -350,9 +455,7 @@ export default function ContactPage() {
                         placeholder="John Doe"
                       />
                       {touched.name && errors.name && (
-                        <p id="name-error" className="text-sm text-red-600">
-                          {errors.name}
-                        </p>
+                        <p className="text-sm text-red-600">{errors.name}</p>
                       )}
                     </div>
 
@@ -371,9 +474,6 @@ export default function ContactPage() {
                         inputMode="tel"
                         onBlur={() => handleBlur("phone")}
                         aria-invalid={!!errors.phone}
-                        aria-describedby={
-                          errors.phone ? "phone-error" : undefined
-                        }
                         className={`w-full px-4 py-3 text-black rounded-lg border outline-none transition-all focus:ring-2 focus:ring-primary/20 ${
                           errors.phone && touched.phone
                             ? "border-red-400 focus:border-red-400"
@@ -382,9 +482,7 @@ export default function ContactPage() {
                         placeholder="077 123 4567 "
                       />
                       {touched.phone && errors.phone && (
-                        <p id="phone-error" className="text-sm text-red-600">
-                          {errors.phone}
-                        </p>
+                        <p className="text-sm text-red-600">{errors.phone}</p>
                       )}
                     </div>
                   </div>
@@ -402,11 +500,9 @@ export default function ContactPage() {
                         id="service"
                         name="service"
                         defaultValue=""
+                        onChange={(e) => setSelectedService(e.target.value)} // Update state on change
                         onBlur={() => handleBlur("service")}
                         aria-invalid={!!errors.service}
-                        aria-describedby={
-                          errors.service ? "service-error" : undefined
-                        }
                         className={`w-full px-4 py-[14px] rounded-lg border text-black outline-none transition-all bg-white focus:ring-2 focus:ring-primary/20 ${
                           errors.service && touched.service
                             ? "border-red-400 focus:border-red-400"
@@ -423,9 +519,7 @@ export default function ContactPage() {
                         ))}
                       </select>
                       {touched.service && errors.service && (
-                        <p id="service-error" className="text-sm text-red-600">
-                          {errors.service}
-                        </p>
+                        <p className="text-sm text-red-600">{errors.service}</p>
                       )}
                     </div>
 
@@ -443,9 +537,6 @@ export default function ContactPage() {
                         name="location"
                         onBlur={() => handleBlur("location")}
                         aria-invalid={!!errors.location}
-                        aria-describedby={
-                          errors.location ? "location-error" : undefined
-                        }
                         className={`w-full px-4 py-3 rounded-lg text-black border outline-none transition-all focus:ring-2 focus:ring-primary/20 ${
                           errors.location && touched.location
                             ? "border-red-400 focus:border-red-400"
@@ -454,7 +545,7 @@ export default function ContactPage() {
                         placeholder="e.g. Nugegoda"
                       />
                       {touched.location && errors.location && (
-                        <p id="location-error" className="text-sm text-red-600">
+                        <p className="text-sm text-red-600">
                           {errors.location}
                         </p>
                       )}
@@ -474,12 +565,9 @@ export default function ContactPage() {
                         type="date"
                         id="date"
                         name="date"
-                        min={new Date().toISOString().split("T")[0]} // ✅ no past dates
+                        min={new Date().toISOString().split("T")[0]}
                         onBlur={() => handleBlur("date")}
                         aria-invalid={!!errors.date}
-                        aria-describedby={
-                          errors.date ? "date-error" : undefined
-                        }
                         className={`w-full px-4 py-3 rounded-lg text-black border outline-none transition-all focus:ring-2 focus:ring-primary/20 ${
                           errors.date && touched.date
                             ? "border-red-400 focus:border-red-400"
@@ -487,13 +575,11 @@ export default function ContactPage() {
                         }`}
                       />
                       {touched.date && errors.date && (
-                        <p id="date-error" className="text-sm text-red-600">
-                          {errors.date}
-                        </p>
+                        <p className="text-sm text-red-600">{errors.date}</p>
                       )}
                     </div>
 
-                    {/* Time */}
+                    {/* Time - Conditional Rendering */}
                     <div className="space-y-2">
                       <label
                         htmlFor="time"
@@ -501,25 +587,40 @@ export default function ContactPage() {
                       >
                         Preferred Time
                       </label>
-                      <input
-                        type="time"
-                        id="time"
-                        name="time"
-                        onBlur={() => handleBlur("time")}
-                        aria-invalid={!!errors.time}
-                        aria-describedby={
-                          errors.time ? "time-error" : undefined
-                        }
-                        className={`w-full px-4 py-3 rounded-lg text-black border outline-none transition-all focus:ring-2 focus:ring-primary/20 ${
-                          errors.time && touched.time
-                            ? "border-red-400 focus:border-red-400"
-                            : "border-slate-200 focus:border-primary"
-                        }`}
-                      />
+
+                      {/* If service is selected, show dropdown, otherwise prompt user */}
+                      {selectedService ? (
+                        <select
+                          id="time"
+                          name="time"
+                          defaultValue=""
+                          onBlur={() => handleBlur("time")}
+                          aria-invalid={!!errors.time}
+                          className={`w-full px-4 py-[15px] rounded-lg border text-black outline-none transition-all bg-white focus:ring-2 focus:ring-primary/20 ${
+                            errors.time && touched.time
+                              ? "border-red-400 focus:border-red-400"
+                              : "border-slate-200 focus:border-primary"
+                          }`}
+                        >
+                          <option value="" disabled>
+                            Select a time
+                          </option>
+                          {availableTimeSlots.map((time) => (
+                            <option key={time} value={time}>
+                              {selectedService === "Deep Cleaning"
+                                ? "9:00 AM - 5:00 PM (Full Day)"
+                                : formatToAmPm(time)}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <div className="w-full px-4 py-[14px] rounded-lg border border-slate-200 bg-slate-50 text-slate-400 text-sm">
+                          Please select a service first
+                        </div>
+                      )}
+
                       {touched.time && errors.time && (
-                        <p id="time-error" className="text-sm text-red-600">
-                          {errors.time}
-                        </p>
+                        <p className="text-sm text-red-600">{errors.time}</p>
                       )}
                     </div>
                   </div>
@@ -537,21 +638,11 @@ export default function ContactPage() {
                       name="message"
                       rows={3}
                       onBlur={() => handleBlur("message")}
-                      aria-invalid={!!errors.message}
-                      aria-describedby={
-                        errors.message ? "message-error" : undefined
-                      }
-                      className={`w-full px-4 py-3 text-black rounded-lg border outline-none transition-all resize-none focus:ring-2 focus:ring-primary/20 ${
-                        errors.message && touched.message
-                          ? "border-red-400 focus:border-red-400"
-                          : "border-slate-200 focus:border-primary"
-                      }`}
+                      className="w-full px-4 py-3 text-black rounded-lg border outline-none transition-all resize-none focus:ring-2 focus:ring-primary/20 border-slate-200 focus:border-primary"
                       placeholder="I have a 3 bedroom apartment and need a deep clean..."
                     />
                     {touched.message && errors.message && (
-                      <p id="message-error" className="text-sm text-red-600">
-                        {errors.message}
-                      </p>
+                      <p className="text-sm text-red-600">{errors.message}</p>
                     )}
                   </div>
 
@@ -561,10 +652,11 @@ export default function ContactPage() {
                     className="w-full bg-primary hover:bg-primary-hover text-white font-bold py-4 rounded-lg shadow-lg hover:shadow-xl transition-all flex items-center justify-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed"
                   >
                     {isSubmitting ? (
-                      "Opening WhatsApp..."
+                      "Checking Availability..."
                     ) : (
                       <>
-                        Send via WhatsApp <MessageCircle className="w-5 h-5" />
+                        Book & Send via WhatsApp{" "}
+                        <MessageCircle className="w-5 h-5" />
                       </>
                     )}
                   </button>
